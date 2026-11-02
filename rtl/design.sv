@@ -1,0 +1,5 @@
+`include "fifomem.sv"
+`include "sync_ptr.sv"
+`include "rptr_empty.sv"
+`include "wptr_full.sv"
+`include "async_fifo.sv"
