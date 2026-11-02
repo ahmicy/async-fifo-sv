@@ -3,3 +3,5 @@
 `include "rptr_empty.sv"
 `include "wptr_full.sv"
 `include "async_fifo.sv"
+`include "fifo_assertions.sv"
+`include "fifo_coverage.sv"
