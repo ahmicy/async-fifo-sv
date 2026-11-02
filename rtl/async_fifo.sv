@@ -12,7 +12,6 @@ module async_fifo #(
 	output logic [DATASIZE-1:0] rdata,
 	output logic rempty
 );
-
 	logic [ADDRSIZE-1:0] waddr, raddr;
 	logic [ADDRSIZE:0] wptr, rptr, wq2_rptr, rq2_wptr;
 
