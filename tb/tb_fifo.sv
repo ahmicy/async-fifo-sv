@@ -116,7 +116,7 @@ module tb_fifo_advanced;
 		fork
 			begin
 				#100us;
-				$fatal(1, "[WATCHDOG TIMEOUT] Simulation hung!");
+				$fatal(1, "[WATCHDOG TIMEOUT] Simulation timeout.");
 			end
 			begin
 				fork
@@ -125,10 +125,10 @@ module tb_fifo_advanced;
 				join
 
 				$display("SIMULATION COMPLETE");
-				$display("Total Written : %0d", total_written);
-				$display("Total Verified : %0d", match_count + mismatch_count);
-				$display("Matches : %0d", match_count);
-				$display("Mismatches : %0d", mismatch_count);
+				$display("Total Written: %0d", total_written);
+				$display("Total Verified: %0d", match_count + mismatch_count);
+				$display("Matches: %0d", match_count);
+				$display("Mismatches: %0d", mismatch_count);
 				
 				if (mismatch_count == 0 && (match_count == total_written)) begin
 					$display("TEST STATUS: PASSED");
