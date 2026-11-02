@@ -1,96 +1,142 @@
 `timescale 1ns/1ps
 
-module tb_fifo;
+bind async_fifo fifo_assertions #(
+	.ADDRSIZE(ADDRSIZE),
+	.DATASIZE(DATASIZE)
+) u_sva (
+	.wclk(wclk),
+	.wrst_n(wrst_n),
+	.winc(winc),
+	.wfull(wfull),
+	.wptr(wptr),
+	.rclk(rclk),
+	.rrst_n(rrst_n),
+	.rinc(rinc),
+	.rempty(rempty),
+	.rptr(rptr)
+);
+
+bind async_fifo fifo_coverage #(
+	.ADDRSIZE(ADDRSIZE)
+) u_cov (
+	.wclk(wclk),
+	.wrst_n(wrst_n),
+	.winc(winc),
+	.wfull(wfull),
+	.rclk(rclk),
+	.rrst_n(rrst_n),
+	.rinc(rinc),
+	.rempty(rempty)
+);
+
+module tb_fifo_advanced;
 	localparam int ADDRSIZE = 4;
 	localparam int DATASIZE = 8;
+	localparam int NUM_TXNS = 500;
 
-	logic wclk = 1'b0;
-	logic wrst_n = 1'b0;
-	logic winc = 1'b0;
+	logic wclk = 0, wrst_n = 0, winc = 0, wfull;
 	logic [DATASIZE-1:0] wdata = '0;
-	logic wfull;
 
-	logic rclk = 1'b0;
-	logic rrst_n = 1'b0;
-	logic rinc = 1'b0;
+	logic rclk = 0, rrst_n = 0, rinc = 0, rempty;
 	logic [DATASIZE-1:0] rdata;
-	logic rempty;
 
-	logic [DATASIZE-1:0] expected [0:15];
-	logic [DATASIZE-1:0] sampled_val;
-	logic [DATASIZE-1:0] expected_val;
-	integer errors;
+	// Asynchronous clock generators
+	always #5ns wclk = ~wclk; // 100 MHz
+	always #10ns rclk = ~rclk; //  50 MHz
 
-	// Keep separate, asynchronous write and read clocks.
-	always #5ns wclk = ~wclk;
-	always #12.5ns rclk = ~rclk;
+	// Instantiate top-level wrapper
+	async_fifo #(.ADDRSIZE(ADDRSIZE), .DATASIZE(DATASIZE)) dut (.*);
 
-	async_fifo #(
-		.ADDRSIZE(ADDRSIZE),
-		.DATASIZE(DATASIZE)
-	) dut (.*);
+	// Reference queue model
+	logic [DATASIZE-1:0] ref_queue[$];
+	int match_count = 0;
+	int mismatch_count = 0;
+	int total_written = 0;
+	bit writes_done = 0;
 
-	initial begin
-		errors = 0;
-		$display("DUAL-CLOCK FIFO TEST");
+	// Concurrently drive writes
+	task automatic drive_writes();
+		logic [DATASIZE-1:0] rand_byte;
+		for (int i = 0; i < NUM_TXNS; i++) begin
 
-		// Release each reset away from its active clock edge.
-		@(negedge wclk);
-		wrst_n = 1'b1;
-		@(negedge rclk);
-		rrst_n = 1'b1;
-
-		$display("Writing 16 values...");
-		for (int i = 0; i < 16; i++) begin
+			// Wait until falling edge; avoid conflicts with other components
 			@(negedge wclk);
-			winc = 1'b1;
-			wdata = 8'hb0 + i;
-			expected[i] = wdata;
-		end
 
-		@(negedge wclk);
-		winc = 1'b0;
-		wdata = '0;
-
-		// The flag is registered by the write-clock update above.
-		if (wfull === 1'b1)
-			$display("PASS: full after 16 writes.");
-		else begin
-			$display("FAIL: full did not assert after 16 writes.");
-			errors = errors + 1;
-		end
-
-		$display("Reading 16 values in order...");
-		wait (rempty == 1'b0);
-		for (int i = 0; i < 16; i++) begin
-			@(negedge rclk);
-			expected_val = expected[i];
-			sampled_val = rdata;
-			rinc = 1'b1;
-			if (sampled_val !== expected_val) begin
-				$display("FAIL: read %0d got 0x%02h, expected 0x%02h.", i, sampled_val, expected_val);
-				errors = errors + 1;
+			// Respect FIFO backpressure and apply ~70% write traffic density
+			if (!wfull && ($urandom_range(0, 100) < 70)) begin
+				rand_byte = $urandom_range(8'h00, 8'hFF);
+				wdata <= rand_byte;
+				winc  <= 1'b1;
+				ref_queue.push_back(rand_byte);
+				total_written++;
 			end else begin
-				$display("PASS: read %0d = 0x%02h.", i, sampled_val);
+				winc  <= 1'b0;
 			end
 		end
+		@(negedge wclk);
+		winc <= 1'b0;
+		writes_done = 1;
+	endtask
 
-		@(negedge rclk);
-		rinc = 1'b0;
-		@(posedge rclk);
-		#1ns;
-		if (rempty === 1'b1)
-			$display("PASS: empty after 16 reads.");
-		else begin
-			$display("FAIL: empty did not assert after 16 reads.");
-			errors = errors + 1;
+	// Concurrently drive reads and compare
+	task automatic drive_reads();
+		logic [DATASIZE-1:0] expected;
+
+		// Run until writes finish and all queued data is verified
+		while (!writes_done || ref_queue.size() > 0) begin
+			@(negedge rclk);
+
+			// Prevent FIFO underflow and apply ~60% read traffic density
+			if (!rempty && ($urandom_range(0, 100) < 60) && (ref_queue.size() > 0)) begin
+				rinc <= 1'b1;
+				expected = ref_queue.pop_front();
+				
+				// Allow combinational read output to settle
+				#1ps;
+				if (rdata !== expected) begin
+					$error("[MISMATCH] Expected 0x%02h, Received 0x%02h", expected, rdata);
+					mismatch_count++;
+				end else begin
+					match_count++;
+				end
+			end else begin
+				rinc <= 1'b0;
+			end
 		end
+		@(negedge rclk);
+		rinc <= 1'b0;
+	endtask
 
-		if (errors == 0)
-			$display("PASS: all FIFO checks passed.");
-		else
-			$fatal(1, "%0d FIFO check(s) failed.", errors);
+	initial begin
+		// Initial reset sequence
+		@(negedge wclk) wrst_n = 1;
+		@(negedge rclk) rrst_n = 1;
 
-		$finish;
+		// Watchdog timeout to prevent infinite simulation hangs
+		fork
+			begin
+				#100us;
+				$fatal(1, "[WATCHDOG TIMEOUT] Simulation hung!");
+			end
+			begin
+				fork
+					drive_writes();
+					drive_reads();
+				join
+
+				$display("SIMULATION COMPLETE");
+				$display("Total Written : %0d", total_written);
+				$display("Total Verified : %0d", match_count + mismatch_count);
+				$display("Matches : %0d", match_count);
+				$display("Mismatches : %0d", mismatch_count);
+				
+				if (mismatch_count == 0 && (match_count == total_written)) begin
+					$display("TEST STATUS: PASSED");
+				end else begin
+					$fatal(1, "TEST STATUS: FAILED with %0d errors", mismatch_count);
+				end
+				$finish;
+			end
+		join_any
 	end
 endmodule
